@@ -79,6 +79,9 @@ def test1():
 
 #used:
 
+LOWER_BOUNDARY=5
+UPPER_BOUNDARY=8
+
 def createDatafFrame(doubleList):
     num_col=len(doubleList[0])
     col_names=['date']
@@ -102,7 +105,8 @@ def getEndIndexes(text, startings):
     lst=[]
     length = len(startings)
     currentStart = 0
-    pattern = re.compile(r'\d{6,8}')
+    compileString = r"\d{" + str(LOWER_BOUNDARY) + "," +str(UPPER_BOUNDARY) + "}"
+    pattern = re.compile(compileString)
     matches = pattern.finditer(text)
     for match in matches:
         starting=match.start()
@@ -138,13 +142,15 @@ def pdfToDf(fileReader,pdfRange=None):
     doubleLst=[]
     if(pdfRange is None):
         rn = range(length)
+    elif(pdfRange[0] > length):
+        rn = range(length)
     else:
         rn= range(max(0, pdfRange[0]-1), min(length, pdfRange[1]))
     for i in rn:
         text=fileReader.getPage(i).extractText()
         currentPageTable = pageTables(text)
         if (len(currentPageTable) > 0):
-            doubleLst.extend(pageTables(text))
+            doubleLst.extend(currentPageTable)
     return createDatafFrame(doubleLst)
 
 def txtToDf(file):
@@ -327,7 +333,11 @@ class Settings:
         print("Goodbye")
 
     def activateFun(self, fun):
-        fun()
+        try:
+            fun()
+        except Exception as e:
+            print("Unexpected error occurred:")
+            print(f"{e}\n")
 
     def activatePath(self):
         self.path.changePathStatus(True)
