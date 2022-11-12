@@ -485,6 +485,8 @@ class Settings:
                             self.book.loc[index, "קפ"] = self.report.df.iloc[i]["sum"]
                             self.report.df.loc[i, "used"] = index+2
                             count += 1
+                            break
+
         print(f"Process ended with {count} changes to the book in the system\nYou may save the book to see changes\nYou may save the file to compare changes\n")
 
     def removeReport(self):
