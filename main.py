@@ -1,9 +1,17 @@
 import PyPDF2
 import re
+
+import numpy as np
 import pandas as pd
 import pathlib
 import os
+from decimal import Decimal
 import openpyxl
+
+EXAMPLE_NAMES= [["ויזה", "ויזה ", "ויזה שח", "ויזה שח "],
+                ["דיינרס","דיינרס ","דיינרס שח","דיינרס שח "],
+                ["ישראכרט","ישראכרט ","ישראכרד","ישראכרד ","ישרכרד","ישרכרד ","ישראכ","ישראכ "],
+                ["אמקס","אמקס ","אמקס שח","אמקס שח "]]
 
 #unused:
 
@@ -171,9 +179,12 @@ def dfToXlsx(df, folderPath,xlsxName=None):
         with pd.ExcelWriter(f"{folderPath}\\{xlsxName}.xlsx") as writer:
             df.to_excel(writer, sheet_name="sheet1", index=False)
 
+def sumOfSumValue(df):
+    return df["sum"].sum()
+
 def sumDf(df):
     df["sum"] = df[["payment_1", "payment_2"]].apply(
-        lambda x: round((float(x[0].replace(",", "")) + float(x[1].replace(",", ""))), 2), axis=1)
+        lambda x: Decimal(str(x[0]).replace(",", "")) +Decimal(str(x[1]).replace(",","")), axis=1)
     return df
 
 def compressDf(df, isSummed):
@@ -183,6 +194,18 @@ def compressDf(df, isSummed):
     sum_df = groups['sum'].sum()
     date_df = groups['date'].min()
     return pd.merge(sum_df, date_df, on="concentration")
+
+def removeRowsUntilSum(df, wantedSum, isSummed=True, removeRowsLimit=100):
+    if (not isSummed):
+        df=sumDf(df)
+    currentSum=sumOfSumValue(df)
+    removedRowsCount=0
+    while(currentSum != wantedSum and removedRowsCount<removeRowsLimit):
+        removedRowsCount+=1
+        currentSum-=df['sum'].iloc[-removedRowsCount]
+    df.drop(df.tail(removedRowsCount).index, inplace=True)
+    return df,removedRowsCount
+
 
 def getFolder():
     str = input("Please enter folder path\n")
@@ -356,14 +379,15 @@ class Settings:
         else:
             print("Path entered does not exist, changes won't be saved\n")
 
-    def filePath(self):
+    def filePath(self, fileName=None):
         if(self.path.usesPath()):
             folderPath=self.path.getPath()
             if(folderPath==""):
                 folderPath=str(pathlib.Path().absolute())
         else:
             folderPath=getFolder()
-        fileName=getFileName()
+        if(fileName==None):
+            fileName=getFileName()
         return folderPath+"\\"+fileName
 
     def addTxt(self):
@@ -425,7 +449,27 @@ class Settings:
     def sumReport(self):
         self.report.df=sumDf(self.report.df)
         self.report.isSummed=True
+        print("sum is "+str(sumOfSumValue(self.report.df)))
         print("Changes activated successfully\n")
+
+    def removeAdditionalLines(self):
+        wantedSum=input("Please enter wanted sum\n")
+        try:
+            wantedSum=Decimal(wantedSum)
+            df, count = removeRowsUntilSum(self.report.df,Decimal(wantedSum),
+                                           self.report.isSummed,(self.report.df.shape[0]-1))
+            self.report.isSummed = True
+            currentSum=sumOfSumValue(df)
+            if currentSum!=wantedSum:
+                print(f"process didn't succeed:\nRemoved {count} rows\nEnded up with {currentSum}"+
+                      f" instead of {wantedSum}\n")
+                return
+            self.report.df=df
+            print(f"Changes activated successfully, removed {count} rows\n")
+        except Exception as e:
+            print(f"Could not proceed, see error below:\n{e}\nChanges won't be saved\n")
+
+
 
     def compressReport(self):
         self.report.df=compressDf(self.report.df,self.report.isSummed)
@@ -520,6 +564,114 @@ class Settings:
         except Exception as e:
             print(f"An error occurred, see error below:\n{e}\nChanges won't be saved\n")
 
+    def automateExample(self):
+        try:
+            generalName = input("Please enter general name\n")
+            sums = []
+            for i in range(4):
+                curSum = Decimal(input(f"Please enter sum for file {EXAMPLE_NAMES[i][0]}\n"))
+                sums.append(curSum)
+            AmexPage=int(input("Please enter Amex point number\n"))
+            YisracardTotal=int(input("Please enter total pages in Yisracard\n"))
+
+            for index, row in enumerate(EXAMPLE_NAMES):
+
+                filePath = self.filePath(generalName) + ".xlsx"
+                if (not os.path.exists(filePath)):
+                    print(f"File does not exist as:\n{filePath}\nExiting\n")
+                    return
+
+                book=None
+                success=False
+                for sheet in row:
+                    try:
+                        book = pd.read_excel(filePath, sheet_name=sheet)
+                        book.columns = book.columns.str.replace(' ', '')
+                        success=True
+                        break
+                    except Exception as e:
+                        success=False
+                if(not success):
+                    print(f"Could Not find in book {generalName} sheet {row[0]}\nExiting")
+                    return
+                self.book=book
+
+                filePath = self.filePath(generalName+" "+row[0])
+                if (os.path.exists(filePath+".csv")):
+                    self.report.df = pd.read_csv(filePath+".csv")
+                    if ("sum" in self.report.df.columns):
+                        self.report.isSummed = True
+                        if (self.report.df.shape[1] < 5):
+                            self.report.isCompressed = True
+                        else:
+                            self.report.isCompressed = False
+                    else:
+                        self.report.isSummed = False
+                        self.report.isCompressed = False
+
+                elif (os.path.exists(filePath+".txt")):
+                    file = open(filePath+".txt", 'rt', encoding='utf8')
+                    self.report.df = txtToDf(file)
+                    self.report.isSummed = False
+                    self.report.isCompressed = False
+
+                elif (os.path.exists(filePath+".pdf")):
+                    file = open(filePath+".pdf", 'rb')
+                    fileReader = PyPDF2.PdfFileReader(file)
+                    if(index<2):
+                        self.report.df = pdfToDf(fileReader)
+                    elif(index==2):
+                        pdfRange = [1, AmexPage-1]
+                        self.report.df = pdfToDf(fileReader, pdfRange)
+                    self.report.isSummed = False
+                    self.report.isCompressed = False
+
+                elif (index==3):
+                    filePath = self.filePath(generalName + " " + EXAMPLE_NAMES[2][0])
+                    if (os.path.exists(filePath + ".pdf")):
+                        file = open(filePath + ".pdf", 'rb')
+                        fileReader = PyPDF2.PdfFileReader(file)
+                        pdfRange = [AmexPage, YisracardTotal]
+                        self.report.df = pdfToDf(fileReader, pdfRange)
+                        self.report.isSummed = False
+                        self.report.isCompressed = False
+
+                else:
+                    print(f"No file found by name:\n{generalName} {row[0]}\nExiting\n")
+                    return
+
+                df, count = removeRowsUntilSum(self.report.df.copy(), sums[index],
+                                               self.report.isSummed, (self.report.df.shape[0] - 1))
+                self.report.isSummed = True
+                currentSum = sumOfSumValue(df)
+                if currentSum != sums[index]:
+                    print(f"process didn't succeed:\nRemoved {count} rows\nEnded up with {currentSum}" +
+                          f" instead of {sums[index]}\nExiting\n")
+                    return
+                self.report.df = df
+                self.report.df = compressDf(self.report.df, self.report.isSummed)
+                self.report.isCompressed = True
+                self.match()
+
+                changesName=generalName+" "+row[0] + " שינויים"
+                newFilePath = self.filePath(changesName)
+                try:
+                    dfToCsv(self.report.df, newFilePath)
+                    print(f"Saved report:\n{changesName}\n")
+                except Exception as e:
+                    print(f"Could not save:\n{changesName}\nSee error below:\n{e}\nContinue\n")
+                changesName = generalName + " " + row[0] + " קפ"
+                newFilePath = self.filePath(changesName)
+                try:
+                    dfToXlsx(self.book, newFilePath)
+                    print(f"Saved book:\n{changesName}\n")
+                except Exception as e:
+                    print(f"Could not save:\n{changesName}\nSee error below:\n{e}\nContinue\n")
+
+
+
+        except Exception as e:
+            print(f"An error occurred, see error below:\n{e}\nExiting\n")
 
 
     def generateOptoions(self):
@@ -565,6 +717,10 @@ class Settings:
                 lst.append(f"{strAdd}File needs to be compressed in order to match with book\nFor compressing the file please enter {count}")
                 strAdd=""
                 self.funDict[count]=self.compressReport
+            count+=1
+            lst.append(f"{strAdd}You can remove unnecessary rows from the bottom of the file to match a sum\nFor removing rows please enter {count}")
+            strAdd=""
+            self.funDict[count]=self.removeAdditionalLines
 
             count+=1
             lst.append(f"{strAdd}You can save the file in csv format on your computer\nFor saving the file please enter {count}")
@@ -603,6 +759,10 @@ class Settings:
             count+=1
             lst.append(f"{strAdd}\nFor changing folder status please enter {count}")
             self.funDict[count]=self.changeFolderStatus
+
+        count+=1
+        lst.append(f"For automated example process please enter {count}")
+        self.funDict[count]=self.automateExample
 
         count+=1
         lst.append(f"To quit the program please enter {count}")
